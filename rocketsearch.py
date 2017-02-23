@@ -26,7 +26,9 @@ def getZDOutput(credentials, subdomain):
     url = 'https://'+ zd_domain +'.zendesk.com/api/v2/search.json?' + urlencode(zd_params)
     print url
 
-    response = session.get(url)
+    response = session.get(url, timeout=10)
+    if not response:
+        print "response timed out???"
     if response.status_code != 200:
         print('Status:', response.status_code, 'Problem with the request. Exiting.')
         return None
@@ -89,12 +91,12 @@ def connectToJira(options):
     return jira
 
 def getJiraTickets(jira, search_str, text_only):
-    # Uses JIRA API to search for tickets matching the JRQ language query string. Returns a list of JIRA Issue objects.
+    # Uses JIRA API to search for tickets matching the JQL language query string. Returns a list of JIRA Issue objects.
     if text_only:
-        # Searches based on text only. Shortcuts full JRQ.
+        # Searches based on text only. Shortcuts full JQL.
         tickets = jira.search_issues("text ~ '%s'" % search_str)
     else:
-        # Must be a full JRQ query.
+        # Must be a full JQL query.
         tickets = jira.search_issues(search_str)
     return tickets
 
@@ -197,7 +199,7 @@ class slack:
 
     def response(self, string):
         # Pushes the bot's response to Slack postMessage API
-        print "Response to channel %s is: %s" % (self.channel, string)
+        print "Response to channel %s is: \n%s" % (self.channel, string)
         rocketsearch.api_call("chat.postMessage", channel=self.channel, text=string, as_user=True, unfurl_links=False)
 
 class search:
@@ -209,6 +211,7 @@ class search:
         self.textonly = False
         self.help = False
 
+        # If it's a direct message to the bot
         if slackObj.isDM and re.search(r'zendesk', slackObj.text, re.I):
             print "DM zendesk: " + slackObj.text
             self.zd = True
@@ -220,17 +223,25 @@ class search:
             self.textonly = True
             self.zd = True
             self.jira = True
-        elif re.search(r'^(<@U43QEBKQE>.*?zendesk)', slackObj.text, re.I):
+        elif slackObj.isDM and re.search(r'help', slackObj.text, re.I):
+            print "DM help: " + slackObj.text
+            self.help = True
+
+        # If we're tagged in a channel with "@<BOT>" at the start of a line
+        elif re.search(r'^(<@%s.*?zendesk)' % slackBot, slackObj.text, re.I):
             print "Channel zendesk: " + slackObj.text
             self.zd = True
-        elif re.search(r'^(<@U43QEBKQE>.*?jira)', slackObj.text, re.I):
+        elif re.search(r'^(<@%s.*?jira)' % slackBot, slackObj.text, re.I):
             print "Channel jira: " + slackObj.text
             self.jira = True
-        elif re.search(r'^(<@U43QEBKQE>.*?text)', slackObj.text, re.I):
+        elif re.search(r'^(<@%s.*?text)' % slackBot, slackObj.text, re.I):
             print "Channel text: " + slackObj.text
             self.textonly = True
             self.zd = True
             self.jira = True
+        elif re.search(r'^(<@%s.*?help)' % slackBot, slackObj.text, re.I):
+            print "Channel help: " + slackObj.text
+            self.help = True
         else:
             self.invoked = False
             print "I was not invoked or source was selected"
@@ -284,11 +295,24 @@ def main():
                     if message.checkInvoked():
                         # If so, check whether there were quotes in the message. If not, read back later.
                         if not message.search.getSearchParams(message) and message.search.invoked:
-                            message.response("No search parameters found.")
+                            if message.search.help:
+                                if not message.isDM:
+                                    message.response("Happy to help. Check your direct messages.")
+                                    # Update destination channel to the user's ID, thus sending a direct message.
+                                    message.channel = message.user
+                                message.response(help_string)
+                            else:
+                                message.response("No search parameters found.")
                             sleep(1)
                             continue
                         # Check for a message specified result limit
                         message.search.getLimit(message)
+                        # Check to ensure there's no characters we can't turn into a URL.
+                        try:
+                            str(message.search.string)
+                        except UnicodeEncodeError as e:
+                            message.search.string = message.search.string.encode("ascii", "ignore")
+                            print message.search.string, type (message.search.string)
                         # Run the search parameters against the Zendesk Query API
                         if message.search.zd:
                             zd_params["query"] = message.search.string
@@ -327,6 +351,7 @@ def main():
                 else:
                     print message
             except (IndexError, KeyError) as e:
+                print str(e)
                 pass
             sleep(1)
 
@@ -375,6 +400,63 @@ if __name__ == "__main__":
     gencfg = cfg["general"]
     global result_limit
     result_limit = gencfg["result_limit"]
+
+    help_string = """*_A handy Slack bot made by slaffer to search Zendesk and JIRA._*
+
+*Getting Stated:*
+> Open a direct message to me or invite me to a channel.
+
+*How to Search:*
+> Choose your provider:
+>  1) Zendesk (GSS Cases)
+>  2) JIRA (Tickets)
+>  3) Text (Search both Zendesk and JIRA for text)
+>
+> If you're messaging me directly, simply type your provider followed by your search query in quotes.
+> If you're in a channel, tag me, type your operator and then your query.
+
+*Searching Zendesk:*
+Zendesk searches are text only and are returned in newest to oldest.
+> In a channel:
+>  - `@rocketsearch search zendesk for "<query>"`
+>     or simply
+>  - `@rocketsearch zendesk "<query>"`
+> Directly:
+>  - `zendesk "query"`
+
+*Searching JIRA:*
+JIRA searches are done in the JIRA Query Langauage (<https://confluence.atlassian.com/jirasoftwarecloud\
+/advanced-searching-764478330.html#Advancedsearching-Understandingadvancedsearching|JQL>)
+> In a channel:
+>  - `@rocketsearch jira "<JQL query>"`
+> Directly:
+>  - `jira "<JQL query>"`
+
+*Searching for Text:*
+This searches both Zendesk and JIRA for the following text. Multiple words or strings are considered as ANDs.
+> In a channel:
+>  - `@rocketsearch text "<words>"`
+> Directly:
+>  - `text "<words>"`
+
+*Limiting results:*
+By default, a maximum of 5 results are returned per provider. You can change this limit by appending\
+ `limit=<number>` or `limit=None` to your query.
+> In a channel:
+>  - `@rocketsearch text "<words>" limit=10`
+> Directly:
+>  - `text "<words>" limit=none`
+
+*Full Examples:*
+>In a channel:
+>`@rocketsearch zendesk "vxlan qinq" limit=2`
+>`@rocketsearch jira "reporter = slaffer AND project = CM AND text ~ 'vxlan'"`
+>Directly:
+>`text "snmp bgp mibs" limit=3`
+
+*Bugs and Feature Requests:*
+Please open a JIRA ticket in the GSS project and assign it to @slaffer.
+"""
 
     main()
     exit(0)
