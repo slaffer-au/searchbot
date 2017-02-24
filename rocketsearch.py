@@ -351,7 +351,7 @@ def main():
                 else:
                     print message
             except (IndexError, KeyError) as e:
-                print str(e)
+                #print str(e)
                 pass
             sleep(1)
 
@@ -403,6 +403,17 @@ if __name__ == "__main__":
 
     help_string = """*_A handy Slack bot made by slaffer to search Zendesk and JIRA._*
 
+*Full Examples (i.e. the TL;DR notes):*
+>In a channel:
+>`@rocketsearch zendesk "assignee:slaffer@cumulusnetworks.com vxlan qinq" limit=2`
+>`@rocketsearch jira "reporter = slaffer AND project = CM AND text ~ 'vxlan'"`
+>`@rocketsearch text "snmp bgp mibs" limit=3`
+>Directly:
+>`zendesk "requester:ben.jackson@slicedtech.com.au type:ticket console locks up"`
+>`jira "labels in (customer-found, gss, scrub) AND project = 'CM'" limit=none`
+>`text "mellanox vxlan udp source port"`
+
+``` ```
 *Getting Stated:*
 > Open a direct message to me or invite me to a channel.
 
@@ -416,7 +427,8 @@ if __name__ == "__main__":
 > If you're in a channel, tag me, type your operator and then your query.
 
 *Searching Zendesk:*
-Zendesk searches are text only and are returned in newest to oldest.
+Zendesk searches can be text only or can include certain operators outlined in the <https://support.ze\
+ndesk.com/hc/en-us/articles/203663226|Search Reference>. Only tickets are returned in newest to oldest.
 > In a channel:
 >  - `@rocketsearch search zendesk for "<query>"`
 >     or simply
@@ -447,12 +459,6 @@ By default, a maximum of 5 results are returned per provider. You can change thi
 > Directly:
 >  - `text "<words>" limit=none`
 
-*Full Examples:*
->In a channel:
->`@rocketsearch zendesk "vxlan qinq" limit=2`
->`@rocketsearch jira "reporter = slaffer AND project = CM AND text ~ 'vxlan'"`
->Directly:
->`text "snmp bgp mibs" limit=3`
 
 *Bugs and Feature Requests:*
 Please open a JIRA ticket in the GSS project and assign it to @slaffer.
