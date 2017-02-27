@@ -6,42 +6,55 @@ Usage:
 
 Options:
     -h, --help                                     Show this help message and exit.
+    -r, --refresh-cache                            Refresh cached user and org data from Zendesk
     -l LEVEL, --level LEVEL                        Logging level during execution. Available options: DEBUG, INFO, WARNING, ERROR (default), CRITICAL [default: WARNING]
     -c CONFIGFILE, --config CONFIGFILE             Provide a file containing credentials and settings [default: ./rocketsearch.yml]
     --list-channels                                Do not start the Slack bot, instead return a list of the current channels. Used to determine channel id for configuration.
 """
 
-import requests, re, yaml, os, pprint
+import requests, re, yaml, os, pickle
 from docopt import docopt
 from urllib import urlencode
 from jira import JIRA, JIRAError
 from slackclient import SlackClient
 from time import sleep
 
-def getZDOutput(credentials, subdomain):
+def getZDOutput(credentials, subdomain, r_type, **kwargs):
     # Use Zendesk Query API to search
     session = requests.Session()
     session.auth = credentials
+    print r_type
+    print kwargs, type(kwargs)
 
-    url = 'https://'+ zd_domain +'.zendesk.com/api/v2/search.json?' + urlencode(zd_params)
-    print url
+    if kwargs and kwargs["params"]:
+        url = 'https://%s.zendesk.com/api/v2/%s.json?%s' % (subdomain, r_type, urlencode(kwargs["params"]))
+    else:
+        url = 'https://' + zd_domain + '.zendesk.com/api/v2/' + r_type + '.json'
 
-    response = session.get(url, timeout=10)
-    if not response:
-        print "response timed out???"
-    if response.status_code != 200:
-        print('Status:', response.status_code, 'Problem with the request. Exiting.')
-        return None
-
-    # Get all responses as JSON and convert to dict
-    data = response.json()
+    data = []
+    while url:
+        print url
+        response = session.get(url, timeout=10)
+        if not response:
+            print "response timed out???"
+        if response.status_code != 200:
+            print('Status:', response.status_code, 'Problem with the request. Exiting.')
+            return None
+        # Get all responses as JSON and convert to dict
+        t_data = response.json()
+        if r_type == "search":
+            data.extend(t_data['results'])
+        else:
+            data.extend(t_data[r_type])
+        url = t_data['next_page']
+    print data
     return data
 
 def parseZDOutput(data):
     # Search for tickets in Zendesk query results
     tickets = []
     others = []
-    for result in data['results']:
+    for result in data:
         if result['result_type'] == "ticket":
             tickets.append(result)
         else:
@@ -66,7 +79,7 @@ def respondZDData(tickets, result_limit):
     # Function to return all Zendesk results, formatted as a single string for Slack
 
     # Fields I care about
-    t_fields = ['id', 'subject', 'submitter_id','assignee_id', 'status', 'description']
+    t_fields = ['id', 'subject', 'submitter_id','assignee_id', 'organization_id', 'status', 'description']
     response = ""
     result = 0
 
@@ -76,9 +89,26 @@ def respondZDData(tickets, result_limit):
             for field in t_fields:
                 if field == "id":
                     human_url = "https://cumulusnetworks.zendesk.com/agent/tickets/"+str(ticket[field])
-                    response = response+"*"+str(field.capitalize())+"*: <"+human_url+"|"+str(ticket[field])+">\n"
+                    response = response+"*ID*: <"+human_url+"|#"+str(ticket[field])+">\n"
+                elif field == "submitter_id":
+                    try:
+                        response = response + "*Submitter*: %s (%s)\n" % (str(zd_users[ticket[field]]["name"]), \
+                                                                          str(zd_users[ticket[field]]["email"]))
+
+                    except KeyError:
+                        response = response + "*Submitter*: " + str(ticket[field]) + "\n"
+                elif field == "assignee_id":
+                    try:
+                        response = response + "*Assignee*: " + str(zd_users[ticket[field]]["name"]) + "\n"
+                    except KeyError:
+                        response = response + "*Assignee*: " + str(ticket[field]) + "\n"
+                elif field == "organization_id":
+                    try:
+                        response = response + "*Organisation*: " + str(zd_orgs[ticket[field]]["name"]) + "\n"
+                    except KeyError:
+                        response = response + "*Organisation*: " + str(ticket[field]) + "\n"
                 elif field == "description":
-                    response = response + "*"+str(field.capitalize())+"*" + ": " + ticket[field]\
+                    response = response + "*Description*: " + ticket[field]\
                         [:100].replace('\n', ' ').replace("\r", "") + "\n"
                 else:
                     response = response + "*"+str(field.capitalize())+"*" + ": " + str(ticket[field]) + "\n"
@@ -277,6 +307,30 @@ class search:
 
 def main():
 
+    # Get all ZD Users and Orgs
+    if not (os.path.isfile("/tmp/zd_users_list.pickle") and os.path.isfile("/tmp/zd_orgs_list.pickle")) \
+            or arguments["--refresh-cache"]:
+        zd_users_list = getZDOutput(zd_credentials, zd_params, "users")
+        zd_orgs_list = getZDOutput(zd_credentials, zd_params, "organizations")
+        pickle.dump(zd_users_list, open("/tmp/zd_users_list.pickle", 'wb'))
+        pickle.dump(zd_orgs_list, open("/tmp/zd_orgs_list.pickle", 'wb'))
+    else:
+        zd_users_list = pickle.load(open("/tmp/zd_users_list.pickle", 'rb'))
+        zd_orgs_list = pickle.load(open("/tmp/zd_orgs_list.pickle", 'rb'))
+
+    global zd_users
+    zd_users = {}
+    for user in zd_users_list:
+        zd_users[user["id"]] = {"name": user["name"], "email" : user["email"]}
+
+    global zd_orgs
+    zd_orgs = {}
+    for org in zd_orgs_list:
+        zd_orgs[org["id"]] = {"name": org["name"]}
+
+    del(zd_users_list)
+    del(zd_orgs_list)
+
     # Instantiate Slack API object
     global rocketsearch
     rocketsearch = SlackClient(slackToken)
@@ -316,7 +370,7 @@ def main():
                         # Run the search parameters against the Zendesk Query API
                         if message.search.zd:
                             zd_params["query"] = message.search.string
-                            zd_data = getZDOutput(zd_credentials, zd_domain)
+                            zd_data = getZDOutput(zd_credentials, zd_domain, "search", params=zd_params)
                             zd_tickets = parseZDOutput(zd_data)
                             if zd_tickets:
                                 message.response(respondZDData(zd_tickets, message.search.result_limit))
@@ -351,7 +405,7 @@ def main():
                 else:
                     print message
             except (IndexError, KeyError) as e:
-                #print str(e)
+                print str(e)
                 pass
             sleep(1)
 
