@@ -251,7 +251,7 @@ class search:
             print "DM jira: " + slackObj.text
             self.jira = True
         elif slackObj.isDM and re.search(r'sf|salesforce', slackObj.text, re.I):
-            print "DM sfdc: " + slackObj.text
+            print "DM sfdc: " + slackObj.text.encode("ascii", "ignore")
             self.sfdc = True
         elif slackObj.isDM and re.search(r'text', slackObj.text, re.I):
             print "DM text: " + slackObj.text
@@ -270,7 +270,7 @@ class search:
             print "Channel jira: " + slackObj.text
             self.jira = True
         elif re.search(r'^(<@%s.*? sf|salesforce)' % slackBot, slackObj.text, re.I):
-            print "Channel sfdc: " + slackObj.text
+            print "Channel sfdc: " + slackObj.text.encode("ascii", "ignore")
             self.sfdc = True
         elif re.search(r'^(<@%s.*?text)' % slackBot, slackObj.text, re.I):
             print "Channel text: " + slackObj.text
@@ -347,7 +347,7 @@ def main():
 
     # Get all ZD Users and Orgs
     if not (os.path.isfile("/tmp/zd_users_list.pickle") and os.path.isfile("/tmp/zd_orgs_list.pickle")) \
-            and arguments["--refresh-cache"]:
+            or arguments["--refresh-cache"]:
         zd_users_list = getZDOutput(zd_credentials, zd_params, "users")
         zd_orgs_list = getZDOutput(zd_credentials, zd_params, "organizations")
         pickle.dump(zd_users_list, open("/tmp/zd_users_list.pickle", 'wb'))
