@@ -18,6 +18,7 @@ from urllib import urlencode
 from jira import JIRA, JIRAError
 from slackclient import SlackClient
 from time import sleep
+from simple_salesforce import Salesforce
 
 def getZDOutput(credentials, subdomain, r_type, **kwargs):
     # Use Zendesk Query API to search
@@ -238,6 +239,7 @@ class search:
         self.invoked = True
         self.zd = False
         self.jira = False
+        self.sfdc = False
         self.textonly = False
         self.help = False
 
@@ -248,6 +250,9 @@ class search:
         elif slackObj.isDM and re.search(r'jira', slackObj.text, re.I):
             print "DM jira: " + slackObj.text
             self.jira = True
+        elif slackObj.isDM and re.search(r'sf|salesforce', slackObj.text, re.I):
+            print "DM sfdc: " + slackObj.text
+            self.sfdc = True
         elif slackObj.isDM and re.search(r'text', slackObj.text, re.I):
             print "DM text: " + slackObj.text
             self.textonly = True
@@ -264,6 +269,9 @@ class search:
         elif re.search(r'^(<@%s.*?jira)' % slackBot, slackObj.text, re.I):
             print "Channel jira: " + slackObj.text
             self.jira = True
+        elif re.search(r'^(<@%s.*? sf|salesforce)' % slackBot, slackObj.text, re.I):
+            print "Channel sfdc: " + slackObj.text
+            self.sfdc = True
         elif re.search(r'^(<@%s.*?text)' % slackBot, slackObj.text, re.I):
             print "Channel text: " + slackObj.text
             self.textonly = True
@@ -282,7 +290,7 @@ class search:
         _regex = ur'((\"|\u201c)(.*?)\")'
         _regexc = re.compile(_regex, re.UNICODE)
         self.string = re.search(_regexc, slackObj.text)
-        if self.string and (self.jira or self.zd):
+        if self.string and (self.jira or self.zd or self.sfdc):
             self.string = self.string.group(3)
             return True
         else:
@@ -305,11 +313,41 @@ class search:
             print "Using default result limit of %s" % result_limit
             self.result_limit = result_limit
 
+class sfdc(object):
+
+    def __init__(self, options):
+        self.options = options
+
+        self.sf = Salesforce(username=options["username"], password=options["password"],
+                             security_token=options["token"])
+
+    def getRecords(self, query):
+        self.query = query
+        print "Searching SFDC for %s" % self.query
+
+        self.contacts = []
+        self.accounts = []
+        self.users = []
+
+        results = self.sf.quick_search(self.query)
+        if not results:
+            return False
+
+        for record in results:
+            if record['attributes']['type'] == 'Contact':
+                self.contacts.append(self.sf.Contact.get(record["Id"]))
+            elif record['attributes']['type'] == 'User':
+                self.users.append(self.sf.User.get(record["Id"]))
+            elif record['attributes']['type'] == 'Account':
+                self.accounts.append(self.sf.Account.get(record["Id"]))
+
+        return True
+
 def main():
 
     # Get all ZD Users and Orgs
     if not (os.path.isfile("/tmp/zd_users_list.pickle") and os.path.isfile("/tmp/zd_orgs_list.pickle")) \
-            or arguments["--refresh-cache"]:
+            and arguments["--refresh-cache"]:
         zd_users_list = getZDOutput(zd_credentials, zd_params, "users")
         zd_orgs_list = getZDOutput(zd_credentials, zd_params, "organizations")
         pickle.dump(zd_users_list, open("/tmp/zd_users_list.pickle", 'wb'))
@@ -401,6 +439,34 @@ def main():
                                 message.response(jr_response)
                             else:
                                 message.response("No results in JIRA for your search.")
+                        if message.search.sfdc:
+                            sfdata = sfdc(sf_options)
+                            if not sfdata.getRecords(message.search.string):
+                                message.response("No results in Salesforce for your search")
+                                sleep(1)
+                                continue
+                            else:
+                                sf_response = ""
+                                if sfdata.accounts:
+                                    sf_response += "`Accounts`\n"
+                                    for record in sfdata.accounts:
+                                        sf_response += "<https://%s/%s|%s>\n>*Licenses*: %s\n>*Account Manager*: %s\n" \
+                                                        % (sfdata.sf.sf_instance, record["Id"], record["Name"],
+                                                        record["Active_Support_Licenses__c"].replace("\n", " "),
+                                                        record["Account_Manager__c"])
+                                if sfdata.contacts:
+                                    sf_response += "`Contacts`\n"
+                                    for record in sfdata.contacts:
+                                        sf_response += "<https://%s/%s|%s>\n>*Email*: %s\n" \
+                                                       % (sfdata.sf.sf_instance, record["Id"], record["Name"],
+                                                          record["Email"])
+                                if sfdata.users:
+                                    sf_response += "`Users`\n"
+                                    for record in sfdata.users:
+                                        sf_response += "<https://%s/%s|%s>\n>*Email*: %s\n" \
+                                                       % (sfdata.sf.sf_instance, record["Id"], record["Name"],
+                                                          record["Email"])
+                                message.response(sf_response)
                         sleep(1)
                 else:
                     print message
@@ -449,6 +515,14 @@ if __name__ == "__main__":
     slackToken = slkcfg['token']
     global slackBot
     slackBot = slkcfg["bot_id"]
+
+    ### SalesForce ###
+    sfcfg = cfg["salesforce"]
+    sf_options = {
+        "username" : sfcfg["username"],
+        "password" : sfcfg["password"],
+        "token" : sfcfg["security_token"]
+    }
 
     ### General ###
     gencfg = cfg["general"]
