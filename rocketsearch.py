@@ -230,7 +230,7 @@ class slack:
 
     def response(self, string):
         # Pushes the bot's response to Slack postMessage API
-        print "Response to channel %s is: \n%s" % (self.channel, string)
+        print "Response to channel %s is: \n%s" % (self.channel, string.encode("ascii", "ignore"))
         rocketsearch.api_call("chat.postMessage", channel=self.channel, text=string, as_user=True, unfurl_links=False)
 
 class search:
