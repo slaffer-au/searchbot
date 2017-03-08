@@ -313,7 +313,7 @@ class search:
             print "Using default result limit of %s" % result_limit
             self.result_limit = result_limit
 
-class sfdc(object):
+class sfdc():
 
     def __init__(self, options):
         self.options = options
@@ -328,6 +328,7 @@ class sfdc(object):
         self.contacts = []
         self.accounts = []
         self.users = []
+        self.leads = []
 
         results = self.sf.quick_search(self.query)
         if not results:
@@ -340,6 +341,8 @@ class sfdc(object):
                 self.users.append(self.sf.User.get(record["Id"]))
             elif record['attributes']['type'] == 'Account':
                 self.accounts.append(self.sf.Account.get(record["Id"]))
+            elif record['attributes']['type'] == 'Lead':
+                self.leads.append(self.sf.Lead.get(record["Id"]))
 
         return True
 
@@ -466,6 +469,13 @@ def main():
                                         sf_response += "<https://%s/%s|%s>\n>*Email*: %s\n" \
                                                        % (sfdata.sf.sf_instance, record["Id"], record["Name"],
                                                           record["Email"])
+                                if sfdata.leads:
+                                    sf_response += "`Leads`\n"
+                                    for record in sfdata.leads:
+                                        sf_response += "<https://%s/%s|%s>\n>*Email*: %s\n>*Company*: %s\n>" \
+                                                       "*Title*: %s\n" \
+                                                       % (sfdata.sf.sf_instance, record["Id"], record["Name"],
+                                                          record["Email"], record["Company"], record["Title"])
                                 message.response(sf_response)
                         sleep(1)
                 else:
