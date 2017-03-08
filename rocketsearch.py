@@ -6,40 +6,56 @@ Usage:
 
 Options:
     -h, --help                                     Show this help message and exit.
+    -r, --refresh-cache                            Refresh cached user and org data from Zendesk
     -l LEVEL, --level LEVEL                        Logging level during execution. Available options: DEBUG, INFO, WARNING, ERROR (default), CRITICAL [default: WARNING]
     -c CONFIGFILE, --config CONFIGFILE             Provide a file containing credentials and settings [default: ./rocketsearch.yml]
     --list-channels                                Do not start the Slack bot, instead return a list of the current channels. Used to determine channel id for configuration.
 """
 
-import requests, re, yaml, os, pprint
+import requests, re, yaml, os, pickle
 from docopt import docopt
 from urllib import urlencode
 from jira import JIRA, JIRAError
 from slackclient import SlackClient
 from time import sleep
+from simple_salesforce import Salesforce
 
-def getZDOutput(credentials, subdomain):
+def getZDOutput(credentials, subdomain, r_type, **kwargs):
     # Use Zendesk Query API to search
     session = requests.Session()
     session.auth = credentials
+    print r_type
+    print kwargs, type(kwargs)
 
-    url = 'https://'+ zd_domain +'.zendesk.com/api/v2/search.json?' + urlencode(zd_params)
-    print url
+    if kwargs and kwargs["params"]:
+        url = 'https://%s.zendesk.com/api/v2/%s.json?%s' % (subdomain, r_type, urlencode(kwargs["params"]))
+    else:
+        url = 'https://' + zd_domain + '.zendesk.com/api/v2/' + r_type + '.json'
 
-    response = session.get(url)
-    if response.status_code != 200:
-        print('Status:', response.status_code, 'Problem with the request. Exiting.')
-        return None
-
-    # Get all responses as JSON and convert to dict
-    data = response.json()
+    data = []
+    while url:
+        print url
+        response = session.get(url, timeout=10)
+        if not response:
+            print "response timed out???"
+        if response.status_code != 200:
+            print('Status:', response.status_code, 'Problem with the request. Exiting.')
+            return None
+        # Get all responses as JSON and convert to dict
+        t_data = response.json()
+        if r_type == "search":
+            data.extend(t_data['results'])
+        else:
+            data.extend(t_data[r_type])
+        url = t_data['next_page']
+    print data
     return data
 
 def parseZDOutput(data):
     # Search for tickets in Zendesk query results
     tickets = []
     others = []
-    for result in data['results']:
+    for result in data:
         if result['result_type'] == "ticket":
             tickets.append(result)
         else:
@@ -64,7 +80,7 @@ def respondZDData(tickets, result_limit):
     # Function to return all Zendesk results, formatted as a single string for Slack
 
     # Fields I care about
-    t_fields = ['id', 'subject', 'submitter_id','assignee_id', 'status', 'description']
+    t_fields = ['id', 'subject', 'submitter_id','assignee_id', 'organization_id', 'status', 'description']
     response = ""
     result = 0
 
@@ -74,9 +90,26 @@ def respondZDData(tickets, result_limit):
             for field in t_fields:
                 if field == "id":
                     human_url = "https://cumulusnetworks.zendesk.com/agent/tickets/"+str(ticket[field])
-                    response = response+"*"+str(field.capitalize())+"*: <"+human_url+"|"+str(ticket[field])+">\n"
+                    response = response+"*ID*: <"+human_url+"|#"+str(ticket[field])+">\n"
+                elif field == "submitter_id":
+                    try:
+                        response = response + "*Submitter*: %s (%s)\n" % (str(zd_users[ticket[field]]["name"]), \
+                                                                          str(zd_users[ticket[field]]["email"]))
+
+                    except KeyError:
+                        response = response + "*Submitter*: " + str(ticket[field]) + "\n"
+                elif field == "assignee_id":
+                    try:
+                        response = response + "*Assignee*: " + str(zd_users[ticket[field]]["name"]) + "\n"
+                    except KeyError:
+                        response = response + "*Assignee*: " + str(ticket[field]) + "\n"
+                elif field == "organization_id":
+                    try:
+                        response = response + "*Organisation*: " + str(zd_orgs[ticket[field]]["name"]) + "\n"
+                    except KeyError:
+                        response = response + "*Organisation*: " + str(ticket[field]) + "\n"
                 elif field == "description":
-                    response = response + "*"+str(field.capitalize())+"*" + ": " + ticket[field]\
+                    response = response + "*Description*: " + ticket[field]\
                         [:100].replace('\n', ' ').replace("\r", "") + "\n"
                 else:
                     response = response + "*"+str(field.capitalize())+"*" + ": " + str(ticket[field]) + "\n"
@@ -89,12 +122,12 @@ def connectToJira(options):
     return jira
 
 def getJiraTickets(jira, search_str, text_only):
-    # Uses JIRA API to search for tickets matching the JRQ language query string. Returns a list of JIRA Issue objects.
+    # Uses JIRA API to search for tickets matching the JQL language query string. Returns a list of JIRA Issue objects.
     if text_only:
-        # Searches based on text only. Shortcuts full JRQ.
+        # Searches based on text only. Shortcuts full JQL.
         tickets = jira.search_issues("text ~ '%s'" % search_str)
     else:
-        # Must be a full JRQ query.
+        # Must be a full JQL query.
         tickets = jira.search_issues(search_str)
     return tickets
 
@@ -197,7 +230,7 @@ class slack:
 
     def response(self, string):
         # Pushes the bot's response to Slack postMessage API
-        print "Response to channel %s is: %s" % (self.channel, string)
+        print "Response to channel %s is: \n%s" % (self.channel, string.encode("ascii", "ignore"))
         rocketsearch.api_call("chat.postMessage", channel=self.channel, text=string, as_user=True, unfurl_links=False)
 
 class search:
@@ -206,31 +239,47 @@ class search:
         self.invoked = True
         self.zd = False
         self.jira = False
+        self.sfdc = False
         self.textonly = False
         self.help = False
 
+        # If it's a direct message to the bot
         if slackObj.isDM and re.search(r'zendesk', slackObj.text, re.I):
             print "DM zendesk: " + slackObj.text
             self.zd = True
         elif slackObj.isDM and re.search(r'jira', slackObj.text, re.I):
             print "DM jira: " + slackObj.text
             self.jira = True
+        elif slackObj.isDM and re.search(r'sf|salesforce', slackObj.text, re.I):
+            print "DM sfdc: " + slackObj.text.encode("ascii", "ignore")
+            self.sfdc = True
         elif slackObj.isDM and re.search(r'text', slackObj.text, re.I):
             print "DM text: " + slackObj.text
             self.textonly = True
             self.zd = True
             self.jira = True
-        elif re.search(r'^(<@U43QEBKQE>.*?zendesk)', slackObj.text, re.I):
+        elif slackObj.isDM and re.search(r'help', slackObj.text, re.I):
+            print "DM help: " + slackObj.text
+            self.help = True
+
+        # If we're tagged in a channel with "@<BOT>" at the start of a line
+        elif re.search(r'^(<@%s.*?zendesk)' % slackBot, slackObj.text, re.I):
             print "Channel zendesk: " + slackObj.text
             self.zd = True
-        elif re.search(r'^(<@U43QEBKQE>.*?jira)', slackObj.text, re.I):
+        elif re.search(r'^(<@%s.*?jira)' % slackBot, slackObj.text, re.I):
             print "Channel jira: " + slackObj.text
             self.jira = True
-        elif re.search(r'^(<@U43QEBKQE>.*?text)', slackObj.text, re.I):
+        elif re.search(r'^(<@%s.*? sf|salesforce)' % slackBot, slackObj.text, re.I):
+            print "Channel sfdc: " + slackObj.text.encode("ascii", "ignore")
+            self.sfdc = True
+        elif re.search(r'^(<@%s.*?text)' % slackBot, slackObj.text, re.I):
             print "Channel text: " + slackObj.text
             self.textonly = True
             self.zd = True
             self.jira = True
+        elif re.search(r'^(<@%s.*?help)' % slackBot, slackObj.text, re.I):
+            print "Channel help: " + slackObj.text
+            self.help = True
         else:
             self.invoked = False
             print "I was not invoked or source was selected"
@@ -241,7 +290,7 @@ class search:
         _regex = ur'((\"|\u201c)(.*?)\")'
         _regexc = re.compile(_regex, re.UNICODE)
         self.string = re.search(_regexc, slackObj.text)
-        if self.string and (self.jira or self.zd):
+        if self.string and (self.jira or self.zd or self.sfdc):
             self.string = self.string.group(3)
             return True
         else:
@@ -264,7 +313,64 @@ class search:
             print "Using default result limit of %s" % result_limit
             self.result_limit = result_limit
 
+class sfdc():
+
+    def __init__(self, options):
+        self.options = options
+
+        self.sf = Salesforce(username=options["username"], password=options["password"],
+                             security_token=options["token"])
+
+    def getRecords(self, query):
+        self.query = query
+        print "Searching SFDC for %s" % self.query
+
+        self.contacts = []
+        self.accounts = []
+        self.users = []
+        self.leads = []
+
+        results = self.sf.quick_search(self.query)
+        if not results:
+            return False
+
+        for record in results:
+            if record['attributes']['type'] == 'Contact':
+                self.contacts.append(self.sf.Contact.get(record["Id"]))
+            elif record['attributes']['type'] == 'User':
+                self.users.append(self.sf.User.get(record["Id"]))
+            elif record['attributes']['type'] == 'Account':
+                self.accounts.append(self.sf.Account.get(record["Id"]))
+            elif record['attributes']['type'] == 'Lead':
+                self.leads.append(self.sf.Lead.get(record["Id"]))
+
+        return True
+
 def main():
+
+    # Get all ZD Users and Orgs
+    if not (os.path.isfile("/tmp/zd_users_list.pickle") and os.path.isfile("/tmp/zd_orgs_list.pickle")) \
+            or arguments["--refresh-cache"]:
+        zd_users_list = getZDOutput(zd_credentials, zd_params, "users")
+        zd_orgs_list = getZDOutput(zd_credentials, zd_params, "organizations")
+        pickle.dump(zd_users_list, open("/tmp/zd_users_list.pickle", 'wb'))
+        pickle.dump(zd_orgs_list, open("/tmp/zd_orgs_list.pickle", 'wb'))
+    else:
+        zd_users_list = pickle.load(open("/tmp/zd_users_list.pickle", 'rb'))
+        zd_orgs_list = pickle.load(open("/tmp/zd_orgs_list.pickle", 'rb'))
+
+    global zd_users
+    zd_users = {}
+    for user in zd_users_list:
+        zd_users[user["id"]] = {"name": user["name"], "email" : user["email"]}
+
+    global zd_orgs
+    zd_orgs = {}
+    for org in zd_orgs_list:
+        zd_orgs[org["id"]] = {"name": org["name"]}
+
+    del(zd_users_list)
+    del(zd_orgs_list)
 
     # Instantiate Slack API object
     global rocketsearch
@@ -284,15 +390,28 @@ def main():
                     if message.checkInvoked():
                         # If so, check whether there were quotes in the message. If not, read back later.
                         if not message.search.getSearchParams(message) and message.search.invoked:
-                            message.response("No search parameters found.")
+                            if message.search.help:
+                                if not message.isDM:
+                                    message.response("Happy to help. Check your direct messages.")
+                                    # Update destination channel to the user's ID, thus sending a direct message.
+                                    message.channel = message.user
+                                message.response(help_string)
+                            else:
+                                message.response("No search parameters found.")
                             sleep(1)
                             continue
                         # Check for a message specified result limit
                         message.search.getLimit(message)
+                        # Check to ensure there's no characters we can't turn into a URL.
+                        try:
+                            str(message.search.string)
+                        except UnicodeEncodeError as e:
+                            message.search.string = message.search.string.encode("ascii", "ignore")
+                            print message.search.string, type (message.search.string)
                         # Run the search parameters against the Zendesk Query API
                         if message.search.zd:
                             zd_params["query"] = message.search.string
-                            zd_data = getZDOutput(zd_credentials, zd_domain)
+                            zd_data = getZDOutput(zd_credentials, zd_domain, "search", params=zd_params)
                             zd_tickets = parseZDOutput(zd_data)
                             if zd_tickets:
                                 message.response(respondZDData(zd_tickets, message.search.result_limit))
@@ -323,10 +442,46 @@ def main():
                                 message.response(jr_response)
                             else:
                                 message.response("No results in JIRA for your search.")
+                        if message.search.sfdc:
+                            sfdata = sfdc(sf_options)
+                            if not sfdata.getRecords(message.search.string):
+                                message.response("No results in Salesforce for your search")
+                                sleep(1)
+                                continue
+                            else:
+                                sf_response = ""
+                                if sfdata.accounts:
+                                    sf_response += "`Accounts`\n"
+                                    for record in sfdata.accounts:
+                                        sf_response += "<https://%s/%s|%s>\n>*Licenses*: %s\n>*Account Manager*: %s\n" \
+                                                        % (sfdata.sf.sf_instance, record["Id"], record["Name"],
+                                                        record["Active_Support_Licenses__c"].replace("\n", " "),
+                                                        record["Account_Manager__c"])
+                                if sfdata.contacts:
+                                    sf_response += "`Contacts`\n"
+                                    for record in sfdata.contacts:
+                                        sf_response += "<https://%s/%s|%s>\n>*Email*: %s\n" \
+                                                       % (sfdata.sf.sf_instance, record["Id"], record["Name"],
+                                                          record["Email"])
+                                if sfdata.users:
+                                    sf_response += "`Users`\n"
+                                    for record in sfdata.users:
+                                        sf_response += "<https://%s/%s|%s>\n>*Email*: %s\n" \
+                                                       % (sfdata.sf.sf_instance, record["Id"], record["Name"],
+                                                          record["Email"])
+                                if sfdata.leads:
+                                    sf_response += "`Leads`\n"
+                                    for record in sfdata.leads:
+                                        sf_response += "<https://%s/%s|%s>\n>*Email*: %s\n>*Company*: %s\n>" \
+                                                       "*Title*: %s\n" \
+                                                       % (sfdata.sf.sf_instance, record["Id"], record["Name"],
+                                                          record["Email"], record["Company"], record["Title"])
+                                message.response(sf_response)
                         sleep(1)
                 else:
                     print message
             except (IndexError, KeyError) as e:
+                print str(e)
                 pass
             sleep(1)
 
@@ -371,10 +526,91 @@ if __name__ == "__main__":
     global slackBot
     slackBot = slkcfg["bot_id"]
 
+    ### SalesForce ###
+    sfcfg = cfg["salesforce"]
+    sf_options = {
+        "username" : sfcfg["username"],
+        "password" : sfcfg["password"],
+        "token" : sfcfg["security_token"]
+    }
+
     ### General ###
     gencfg = cfg["general"]
     global result_limit
     result_limit = gencfg["result_limit"]
+
+    help_string = """*_A handy Slack bot made by slaffer to search Zendesk and JIRA._*
+
+*Full Examples (i.e. the TL;DR notes):*
+>In a channel:
+>`@rocketsearch zendesk "assignee:slaffer@cumulusnetworks.com vxlan qinq" limit=2`
+>`@rocketsearch jira "reporter = slaffer AND project = CM AND text ~ 'vxlan'"`
+>`@rocketsearch text "snmp bgp mibs" limit=3`
+>`@rocketsearch sf "perfecta federal"`
+>Directly:
+>`zendesk "requester:ben.jackson@slicedtech.com.au type:ticket console locks up"`
+>`jira "labels in (customer-found, gss, scrub) AND project = 'CM'" limit=none`
+>`text "mellanox vxlan udp source port"`
+>`salesforce "ben@hostway.com"`
+
+``` ```
+*Getting Stated:*
+> Open a direct message to me or invite me to a channel.
+
+*How to Search:*
+> Choose your provider:
+>  1) Zendesk (GSS Cases)
+>  2) JIRA (Tickets)
+>  3) Text (Search both Zendesk and JIRA for text)
+>  4) Salesforce
+>
+> If you're messaging me directly, simply type your provider followed by your search query in quotes.
+> If you're in a channel, tag me, type your operator and then your query.
+
+*Searching Zendesk:*
+Zendesk searches can be text only or can include certain operators outlined in the <https://support.ze\
+ndesk.com/hc/en-us/articles/203663226|Search Reference>. Only tickets are returned in newest to oldest.
+> In a channel:
+>  - `@rocketsearch search zendesk for "<query>"`
+>     or simply
+>  - `@rocketsearch zendesk "<query>"`
+> Directly:
+>  - `zendesk "query"`
+
+*Searching JIRA:*
+JIRA searches are done in the JIRA Query Langauage (<https://confluence.atlassian.com/jirasoftwarecloud\
+/advanced-searching-764478330.html#Advancedsearching-Understandingadvancedsearching|JQL>)
+> In a channel:
+>  - `@rocketsearch jira "<JQL query>"`
+> Directly:
+>  - `jira "<JQL query>"`
+
+*Searching for Text:*
+This searches both Zendesk and JIRA for the following text. Multiple words or strings are considered as ANDs.
+> In a channel:
+>  - `@rocketsearch text "<words>"`
+> Directly:
+>  - `text "<words>"`
+
+*Limiting results:*
+By default, a maximum of 5 results are returned per provider. You can change this limit by appending\
+ `limit=<number>` or `limit=None` to your query.
+> In a channel:
+>  - `@rocketsearch text "<words>" limit=10`
+> Directly:
+>  - `text "<words>" limit=none`
+
+*Searching Salesforce:*
+This uses Salesforce quick search and returns matching Accounts, Contacts, Leads and Users. Can be called with "sf"\
+or "salesforce". No limits apply to Salesforce queries.
+> In a channel:
+>  - `@rocketsearch sf "<text>"`
+> Directly:
+>  - `sf "<text>"`
+
+*Bugs and Feature Requests:*
+Please open a JIRA ticket in the GSS project and assign it to @slaffer.
+"""
 
     main()
     exit(0)
