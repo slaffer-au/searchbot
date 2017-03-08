@@ -546,10 +546,12 @@ if __name__ == "__main__":
 >`@rocketsearch zendesk "assignee:slaffer@cumulusnetworks.com vxlan qinq" limit=2`
 >`@rocketsearch jira "reporter = slaffer AND project = CM AND text ~ 'vxlan'"`
 >`@rocketsearch text "snmp bgp mibs" limit=3`
+>`@rocketsearch sf "perfecta federal"`
 >Directly:
 >`zendesk "requester:ben.jackson@slicedtech.com.au type:ticket console locks up"`
 >`jira "labels in (customer-found, gss, scrub) AND project = 'CM'" limit=none`
 >`text "mellanox vxlan udp source port"`
+>`salesforce "ben@hostway.com"`
 
 ``` ```
 *Getting Stated:*
@@ -560,6 +562,7 @@ if __name__ == "__main__":
 >  1) Zendesk (GSS Cases)
 >  2) JIRA (Tickets)
 >  3) Text (Search both Zendesk and JIRA for text)
+>  4) Salesforce
 >
 > If you're messaging me directly, simply type your provider followed by your search query in quotes.
 > If you're in a channel, tag me, type your operator and then your query.
@@ -597,6 +600,13 @@ By default, a maximum of 5 results are returned per provider. You can change thi
 > Directly:
 >  - `text "<words>" limit=none`
 
+*Searching Salesforce:*
+This uses Salesforce quick search and returns matching Accounts, Contacts, Leads and Users. Can be called with "sf"\
+or "salesforce". No limits apply to Salesforce queries.
+> In a channel:
+>  - `@rocketsearch sf "<text>"`
+> Directly:
+>  - `sf "<text>"`
 
 *Bugs and Feature Requests:*
 Please open a JIRA ticket in the GSS project and assign it to @slaffer.
