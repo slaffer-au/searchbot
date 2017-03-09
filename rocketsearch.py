@@ -245,40 +245,40 @@ class search:
 
         # If it's a direct message to the bot
         if slackObj.isDM and re.search(r'zendesk', slackObj.text, re.I):
-            print "DM zendesk: " + slackObj.text
+            print "DM zendesk: " + slackObj.text.encode("ascii", "ignore")
             self.zd = True
         elif slackObj.isDM and re.search(r'jira', slackObj.text, re.I):
-            print "DM jira: " + slackObj.text
+            print "DM jira: " + slackObj.text.encode("ascii", "ignore")
             self.jira = True
         elif slackObj.isDM and re.search(r'sf|salesforce', slackObj.text, re.I):
             print "DM sfdc: " + slackObj.text.encode("ascii", "ignore")
             self.sfdc = True
         elif slackObj.isDM and re.search(r'text', slackObj.text, re.I):
-            print "DM text: " + slackObj.text
+            print "DM text: " + slackObj.text.encode("ascii", "ignore")
             self.textonly = True
             self.zd = True
             self.jira = True
         elif slackObj.isDM and re.search(r'help', slackObj.text, re.I):
-            print "DM help: " + slackObj.text
+            print "DM help: " + slackObj.text.encode("ascii", "ignore")
             self.help = True
 
         # If we're tagged in a channel with "@<BOT>" at the start of a line
         elif re.search(r'^(<@%s.*?zendesk)' % slackBot, slackObj.text, re.I):
-            print "Channel zendesk: " + slackObj.text
+            print "Channel zendesk: " + slackObj.text.encode("ascii", "ignore")
             self.zd = True
         elif re.search(r'^(<@%s.*?jira)' % slackBot, slackObj.text, re.I):
-            print "Channel jira: " + slackObj.text
+            print "Channel jira: " + slackObj.text.encode("ascii", "ignore")
             self.jira = True
         elif re.search(r'^(<@%s.*? sf|salesforce)' % slackBot, slackObj.text, re.I):
             print "Channel sfdc: " + slackObj.text.encode("ascii", "ignore")
             self.sfdc = True
         elif re.search(r'^(<@%s.*?text)' % slackBot, slackObj.text, re.I):
-            print "Channel text: " + slackObj.text
+            print "Channel text: " + slackObj.text.encode("ascii", "ignore")
             self.textonly = True
             self.zd = True
             self.jira = True
         elif re.search(r'^(<@%s.*?help)' % slackBot, slackObj.text, re.I):
-            print "Channel help: " + slackObj.text
+            print "Channel help: " + slackObj.text.encode("ascii", "ignore")
             self.help = True
         else:
             self.invoked = False
