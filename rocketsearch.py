@@ -18,7 +18,7 @@ from urllib import urlencode
 from jira import JIRA, JIRAError
 from slackclient import SlackClient
 from time import sleep
-from simple_salesforce import Salesforce
+from simple_salesforce import Salesforce, SalesforceMalformedRequest
 
 def getZDOutput(credentials, subdomain, r_type, **kwargs):
     # Use Zendesk Query API to search
@@ -411,7 +411,12 @@ def main():
                         # Run the search parameters against the Zendesk Query API
                         if message.search.zd:
                             zd_params["query"] = message.search.string
-                            zd_data = getZDOutput(zd_credentials, zd_domain, "search", params=zd_params)
+                            try:
+                                zd_data = getZDOutput(zd_credentials, zd_domain, "search", params=zd_params)
+                            except requests.exceptions.ReadTimeout:
+                                message.response("Unable to connect to Zendesk.")
+                                sleep(1)
+                                continue
                             zd_tickets = parseZDOutput(zd_data)
                             if zd_tickets:
                                 message.response(respondZDData(zd_tickets, message.search.result_limit))
@@ -443,11 +448,19 @@ def main():
                             else:
                                 message.response("No results in JIRA for your search.")
                         if message.search.sfdc:
-                            sfdata = sfdc(sf_options)
-                            if not sfdata.getRecords(message.search.string):
-                                message.response("No results in Salesforce for your search")
-                                sleep(1)
-                                continue
+                            try:
+                                sfdata = sfdc(sf_options)
+                                if not sfdata.getRecords(message.search.string):
+                                    message.response("No results in Salesforce for your search")
+                                    sleep(1)
+                                    continue
+                            except Exception as e:
+                                if SalesforceMalformedRequest:
+                                    message.response("*There was an error in your SalesForce search.*\n>_%s_" % str(e))
+                                else:
+                                    message.response("There's something wrong with SalesForce right now. Please let"\
+                                                     "your rocketsearch admin know")
+                                    print str(e)
                             else:
                                 sf_response = ""
                                 if sfdata.accounts:
