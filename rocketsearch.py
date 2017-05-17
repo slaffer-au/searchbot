@@ -12,7 +12,7 @@ Options:
     --list-channels                                Do not start the Slack bot, instead return a list of the current channels. Used to determine channel id for configuration.
 """
 
-import requests, re, yaml, os, pickle
+import requests, re, yaml, os, pickle, websocket
 from docopt import docopt
 from urllib import urlencode
 from jira import JIRA, JIRAError
@@ -493,8 +493,17 @@ def main():
                         sleep(1)
                 else:
                     print message
+            except websocket._exceptions.WebSocketConnectionClosedException as e:
+                sleep(10)
+                print "Connection to Slack RTM dropped. Attempting to reconnect."
+                if rocketsearch.rtm_connect():
+                    print "Successfully reconnected!"
+                    pass
+                else:
+                    print "Still can't connect. Trying again."
+                    continue
             except (IndexError, KeyError) as e:
-                print str(e)
+                #print str(e)
                 pass
             sleep(1)
 
@@ -556,15 +565,16 @@ if __name__ == "__main__":
 
 *Full Examples (i.e. the TL;DR notes):*
 >In a channel:
+>`@rocketsearch jira "id = FR-137"`
 >`@rocketsearch zendesk "assignee:slaffer@cumulusnetworks.com vxlan qinq" limit=2`
 >`@rocketsearch jira "reporter = slaffer AND project = CM AND text ~ 'vxlan'"`
 >`@rocketsearch text "snmp bgp mibs" limit=3`
->`@rocketsearch sf "perfecta federal"`
+>`@rocketsearch sf "cloud company name"`
 >Directly:
->`zendesk "requester:ben.jackson@slicedtech.com.au type:ticket console locks up"`
+>`zendesk "requester:case.opener@domain.com.au type:ticket console locks up"`
 >`jira "labels in (customer-found, gss, scrub) AND project = 'CM'" limit=none`
 >`text "mellanox vxlan udp source port"`
->`salesforce "ben@hostway.com"`
+>`salesforce "contact@domain.com"`
 
 ``` ```
 *Getting Stated:*
